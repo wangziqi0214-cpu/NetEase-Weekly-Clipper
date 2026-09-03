@@ -63,7 +63,6 @@ lib/
 
 # Frontend dependencies and generated build products
 node_modules/
-/review_workbench/dist/
 *.tsbuildinfo
 /review_workbench/vite.config.js
 /review_workbench/vite.config.d.ts
