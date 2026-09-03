@@ -1,0 +1,40 @@
+{
+    "album_art": {
+        "x": "center",
+        "y": 200,
+        "size": 0.7,
+        "visible": true
+    },
+    "title": {
+        "x": "center",
+        "y": 1015,
+        "font_size": 60,
+        "font": "【MianFei】CangJiGaoDeGuoMiaoHei-CJgaodeguomh-2.ttf",
+        "visible": true
+    },
+    "artist": {
+        "x": "center",
+        "y": 1112,
+        "font_size": 40,
+        "font": "【MianFei】CangJiGaoDeGuoMiaoHei-CJgaodeguomh-2.ttf",
+        "visible": true
+    },
+    "description": {
+        "x": 100,
+        "y": 1456,
+        "font_size": 35,
+        "font": "【MianFei】CangJiGaoDeGuoMiaoHei-CJgaodeguomh-2.ttf",
+        "visible": false
+    },
+    "progress_bar": {
+        "x": "center",
+        "y": 1265,
+        "visible": true
+    },
+    "lyrics": {
+        "visible": true,
+        "y": 917,
+        "font_size": 28,
+        "opacity": 0.4
+    }
+}

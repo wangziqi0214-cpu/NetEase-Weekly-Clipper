@@ -1,0 +1,135 @@
+{
+    "layout_name": "Dark Poster C-Rock",
+    "description": "Dark aesthetic with blurred cover bg, vertical list, and footer.",
+    "colors": {
+        "indigo_950": [
+            30,
+            27,
+            75,
+            255
+        ],
+        "black": [
+            0,
+            0,
+            0,
+            255
+        ],
+        "zinc_900": [
+            24,
+            24,
+            27,
+            255
+        ],
+        "main_white": [
+            255,
+            255,
+            255,
+            255
+        ],
+        "red_accent": [
+            220,
+            38,
+            38,
+            255
+        ],
+        "orange_accent": [
+            249,
+            115,
+            22,
+            255
+        ],
+        "white_10": [
+            255,
+            255,
+            255,
+            26
+        ],
+        "white_40": [
+            255,
+            255,
+            255,
+            102
+        ],
+        "white_50": [
+            255,
+            255,
+            255,
+            128
+        ]
+    },
+    "header": {
+        "prefix_text": "华语摇滚",
+        "title_text": "新歌速递",
+        "font_size": 108,
+        "y_target": 5,
+        "y_start": -200,
+        "anim_duration": 1.2
+    },
+    "date": {
+        "format": "week_range",
+        "day_offset": -7,
+        "font_size": 24,
+        "y": 180,
+        "x_offset_from_right": 250,
+        "color": "white_40"
+    },
+    "divider": {
+        "y": 220,
+        "height": 2,
+        "opacity": 50
+    },
+    "album_list": {
+        "max_items": 3,
+        "start_y": 352,
+        "gap_y": 308,
+        "cover": {
+            "x_pct": 0.1,
+            "size": 200,
+            "border_width": 2,
+            "grayscale_blend": 0.3
+        },
+        "text": {
+            "title_x_offset": 280,
+            "title_y_offset": 20,
+            "title_size": 60,
+            "skew": -12,
+            "artist_x_offset": 290,
+            "artist_y_offset": 100,
+            "artist_size": 30
+        },
+        "accent_line": {
+            "x_offset": 230,
+            "y_offset": 90,
+            "width": 40,
+            "height": 4
+        },
+        "animation": {
+            "base_delay": 0.8,
+            "step_delay": 1.2
+        }
+    },
+    "footer": {
+        "y_from_bottom": 150,
+        "line_opacity": 50,
+        "delay": 0,
+        "left_text": {
+            "template": "{year} / C-Rock / Week {week}",
+            "x": 50,
+            "y_offset": 20,
+            "size": 24,
+            "color": "white_50"
+        },
+        "right_text": {
+            "content": "BANDS NEVER STOP",
+            "x_offset_from_right": 350,
+            "y_offset": 20,
+            "size": 24,
+            "color": "red_accent",
+            "font_weight": "bold"
+        }
+    },
+    "global_effects": {
+        "noise_opacity": 40,
+        "scanline_enabled": true
+    }
+}

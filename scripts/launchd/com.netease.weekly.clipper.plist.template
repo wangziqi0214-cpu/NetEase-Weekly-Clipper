@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.netease.weekly.clipper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON_EXEC}}</string>
+        <string>-m</string>
+        <string>song_discovery.cli</string>
+        <string>daemon</string>
+        <string>--interval-days</string>
+        <string>1.0</string>
+        <string>--daily-hour</string>
+        <string>1</string>
+        <string>--startup-debounce-minutes</string>
+        <string>30.0</string>
+        <string>--bridge-port</string>
+        <string>8765</string>
+        <string>--review-port</string>
+        <string>8502</string>
+        <string>--db-path</string>
+        <string>{{PROJECT_DIR}}/output/discovery.db</string>
+        <string>--cookie-file</string>
+        <string>{{PROJECT_DIR}}/cookie.txt</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{PROJECT_DIR}}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{PROJECT_DIR}}/output/logs/supervisor_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{PROJECT_DIR}}/output/logs/supervisor_stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

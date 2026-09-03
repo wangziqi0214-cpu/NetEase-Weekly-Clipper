@@ -1,0 +1,4 @@
+# Install only into the isolated Apple Silicon TTS environment:
+#   uv venv .venv-mlx --python 3.11
+#   uv pip install --python .venv-mlx/bin/python -r requirements-mlx.txt
+mlx-audio==0.5.0

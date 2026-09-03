@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>KKBOX 会话 Sidecar 诊断</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="logo-title">
+        <span class="icon">📻</span>
+        <h3>KKBOX 会话 Sidecar (诊断面板)</h3>
+      </div>
+      <span id="bridge-badge" class="badge badge-offline">桥接离线</span>
+    </div>
+
+    <div class="status-box">
+      <div class="status-header">
+        <span class="status-label">Sidecar 适配器状态</span>
+        <span id="resume-badge" class="resume-tag" style="display:none;">已断点续传</span>
+      </div>
+      <div id="status-text" class="status-val">检查中...</div>
+      <div id="stage-desc" class="stage-text"></div>
+      <div id="error-desc" class="error-text"></div>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric-item">
+        <div class="metric-num" id="processed-count">-</div>
+        <div class="metric-label">已解析专辑</div>
+      </div>
+      <div class="metric-item">
+        <div class="metric-num" id="pending-count">-</div>
+        <div class="metric-label">队列待处理</div>
+      </div>
+      <div class="metric-item">
+        <div class="metric-num" id="ingested-count">-</div>
+        <div class="metric-label">已入库曲目</div>
+      </div>
+      <div class="metric-item">
+        <div class="metric-num" id="failed-count">-</div>
+        <div class="metric-label">重试失败</div>
+      </div>
+    </div>
+
+    <div class="info-row">
+      <span class="info-label">最近同步时间：</span>
+      <span id="last-time" class="info-val">从未运行</span>
+    </div>
+
+    <div class="actions">
+      <button id="btn-check" class="btn btn-secondary" style="width:100%;">🔄 刷新诊断状态</button>
+    </div>
+
+    <div class="footer-tip">
+      <strong>💡 统一操作指引：</strong><br>
+      日常请直接访问统一控制台 <strong><a href="http://127.0.0.1:8501" target="_blank">http://127.0.0.1:8501</a></strong>。<br>
+      本扩展仅作为后台静默会话适配器，初始化时登录一次 <a href="https://play.kkbox.com" target="_blank">play.kkbox.com</a> 并开启台/港节点即可。
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "KKBOX 新歌采集器 (NetEase Weekly Clipper)",
+  "version": "1.3.7",
+  "description": "基于 KKBOX Web Player 自动采集港台华语新歌并同步至本地发现库",
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "scripting",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://play.kkbox.com/*",
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://play.kkbox.com/*"
+      ],
+      "js": ["extractors.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "KKBOX 新歌采集器"
+  }
+}

@@ -1,0 +1,26 @@
+@import "@glideapps/glide-data-grid/dist/index.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; --bg-app:#090a0f; --bg-surface-1:#12141c; --bg-surface-2:#1a1d28; --bg-surface-hover:#222736; --bg-surface-active:#2a3042; --border-subtle:#232736; --border-strong:#32384e; --border-focus:#3b82f6; --text-primary:#f1f5f9; --text-secondary:#94a3b8; --text-muted:#64748b; --font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; --font-mono:'JetBrains Mono','Fira Code',ui-monospace,monospace; }
+html, body, #root { width:100%; height:100%; }
+body { margin:0; padding:0; background-color:var(--bg-app); color:var(--text-primary); font-family:var(--font-sans); overflow:hidden; user-select:none; }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:#0d0f17; }
+::-webkit-scrollbar-thumb { background:#232736; border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:#3b4259; }
+.dvn-grid { font-family:var(--font-sans) !important; }
+.font-mono-code { font-family:var(--font-mono); }
+.badge-netease { background:rgba(224,46,36,.15); color:#ff5c5c; border:1px solid rgba(224,46,36,.35); }
+.badge-qq { background:rgba(30,204,148,.15); color:#1ecc94; border:1px solid rgba(30,204,148,.35); }
+.badge-kkbox { background:rgba(0,195,255,.15); color:#38bdf8; border:1px solid rgba(0,195,255,.35); }
+.tier-badge-1 { background:rgba(16,185,129,.18); color:#34d399; border:1px solid rgba(16,185,129,.4); }
+.tier-badge-2 { background:rgba(59,130,246,.15); color:#60a5fa; border:1px solid rgba(59,130,246,.35); }
+.tier-badge-3 { background:rgba(245,158,11,.15); color:#fbbf24; border:1px solid rgba(245,158,11,.35); }
+.tier-badge-4 { background:rgba(239,68,68,.15); color:#f87171; border:1px solid rgba(239,68,68,.3); }
+.status-pending { background:#27272a; color:#a1a1aa; }
+.status-approved { background:#064e3b; color:#6ee7b7; border:1px solid rgba(16,185,129,.35); }
+.status-rejected { background:#4c0519; color:#fda4af; border:1px solid rgba(244,63,94,.35); }
+.status-deferred { background:#451a03; color:#fcd34d; border:1px solid rgba(245,158,11,.35); }
+.kbd-chip { background:#1e2230; border:1px solid #333a50; color:#94a3b8; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:600; }

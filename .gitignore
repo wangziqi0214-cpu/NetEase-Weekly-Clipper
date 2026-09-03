@@ -1,0 +1,77 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets and local authentication
+.env
+.env.*
+!.env.example
+cookie.txt
+cookie*.txt
+
+# Python environments and caches
+.venv*/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Runtime state, databases, logs and generated output
+output/
+backup/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+debug_*
+font_diag_*.png
+
+# Local models and installed dependency copies
+models/
+lib/
+
+# src/ contains legacy pip --target packages; retain only project modules
+/src/*
+!/src/crawler/
+!/src/editor/
+!/src/renderer/
+!/src/researcher/
+!/src/utils/
+
+# Downloaded/private media (retain only the generated texture used by the UI)
+/assets/*
+!/assets/noise.png
+*.mp3
+*.m4a
+*.wav
+*.flac
+*.mp4
+*.mov
+
+# Local data exports (do not ignore JSON globally)
+/raw_playlist*.json
+/raw_playlist*.txt
+/researched_playlist*.json
+/simplified_playlist.json
+/models_list.txt
+
+# Frontend dependencies and generated build products
+node_modules/
+/review_workbench/dist/
+*.tsbuildinfo
+/review_workbench/vite.config.js
+/review_workbench/vite.config.d.ts
+
+# Local diagnostic helpers and packaged shortcuts
+/check_*.py
+/debug_*.py
+/font_diag.py
+/list_models*.py
+/test_*.py
+*.app/
