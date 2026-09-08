@@ -1,8 +1,11 @@
 """Orchestration service connecting collectors, selection rules, scoring, and SQLite storage."""
 
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("song_discovery.orchestrator")
 
 from song_discovery.collectors.kkbox import KKBOXCollector
 from song_discovery.collectors.netease import NetEaseCollector
@@ -11,7 +14,6 @@ from song_discovery.db import DiscoveryDB
 from song_discovery.exceptions import EmptyReleaseError, ServiceUnavailableError
 from song_discovery.models import Platform, Release, Track
 from song_discovery.scorer import RelevanceScorer
-from song_discovery.review_helpers import get_active_preference_model, initial_review_status_for_candidate
 from song_discovery.selection import get_selection_rule_label, select_track_from_release
 
 
@@ -195,9 +197,6 @@ class DiscoveryOrchestrator:
         if len(warnings) > 0 and len(releases) > 0:
             status = "success_with_warnings"
 
-        # Load one immutable preference snapshot for this platform batch.
-        preference_model = get_active_preference_model(self.db)
-
         # Process releases & candidates
         saved_candidates = []
         for rel in releases:
@@ -216,16 +215,9 @@ class DiscoveryOrchestrator:
             if not scoring_res.is_candidate:
                 continue
 
-            # 4. Upsert candidate into SQLite
-            initial_status = initial_review_status_for_candidate({
-                "relevance_score": scoring_res.score,
-                "relevance_reasons": scoring_res.reasons,
-                "artist_names": target_track.artist_names_str,
-                "track_title": target_track.title,
-                "release_title": rel.title,
-                "platform": rel.platform,
-                "release_type": rel.release_type,
-            }, model=preference_model)
+            # 4. Upsert candidate into SQLite. Keep the first-pass route high
+            # recall; the local artist-profile pass below is the only automatic
+            # artist-identity demotion, and it never searches the network.
             cid, is_new = self.db.upsert_candidate(
                 platform=rel.platform,
                 release_source_id=rel.source_id,
@@ -243,8 +235,22 @@ class DiscoveryOrchestrator:
                 relevance_score=scoring_res.score,
                 relevance_reasons=scoring_res.reasons,
                 raw_metadata=target_track.raw_metadata,
-                initial_review_status=initial_status,
+                initial_review_status="pending",
             )
+            profile_filter = self.db.apply_local_profile_filter_to_candidate(cid)
+
+            if target_track.artist_names_str and not os.environ.get("PYTEST_CURRENT_TEST"):
+                try:
+                    from song_discovery.artist_knowledge import get_artist_collector, split_artist_names
+                    collector = get_artist_collector(self.db)
+                    for artist_name in split_artist_names(target_track.artist_names_str):
+                        collector.enqueue_artist(
+                            artist_name=artist_name,
+                            song_title=target_track.title,
+                            album_title=rel.title,
+                        )
+                except Exception as exc:
+                    logger.debug(f"Failed to enqueue artist collection: {exc}")
 
             saved_candidates.append({
                 "candidate_id": cid,
@@ -255,7 +261,8 @@ class DiscoveryOrchestrator:
                 "artist_names": target_track.artist_names_str,
                 "selection_rule": rule_desc,
                 "score": scoring_res.score,
-                "reasons": scoring_res.reasons,
+                "reasons": self.db.get_candidate_by_id(cid).get("relevance_reasons", scoring_res.reasons),
+                "profile_filter": profile_filter.get("decision"),
             })
 
         res_dict = {

@@ -101,7 +101,7 @@ class TestDiscoveryOrchestrator(unittest.TestCase):
         self.assertEqual(single_cand["track_number"], 1)
 
     @patch("song_discovery.orchestrator.QQMusicCollector.collect_new_releases")
-    def test_new_generic_release_is_machine_filtered_but_retained(self, mock_qq):
+    def test_new_generic_release_without_completed_profile_stays_pending(self, mock_qq):
         artist = Artist(name="普通歌手")
         track = Track(
             platform="qq", source_id="GENERIC_T", title="普通情歌",
@@ -117,10 +117,10 @@ class TestDiscoveryOrchestrator(unittest.TestCase):
 
         summary = self.orchestrator.run_discovery(platform="qq", limit=1)
         self.assertEqual(summary["total_candidates"], 1)
-        self.assertEqual(len(self.db.get_candidates(status="pending")), 0)
-        retained = self.db.get_candidates(status="machine_filtered")
+        retained = self.db.get_candidates(status="pending")
         self.assertEqual(len(retained), 1)
         self.assertEqual(retained[0]["track_title"], "普通情歌")
+        self.assertEqual(len(self.db.get_candidates(status="machine_filtered")), 0)
 
     @patch("song_discovery.orchestrator.NetEaseCollector.collect_new_releases")
     def test_run_discovery_forwards_netease_pagination_params(self, mock_netease):

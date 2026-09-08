@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 from song_discovery.db import DiscoveryDB
 from song_discovery.models import Artist, Platform, Release, ReleaseType, Track
 from song_discovery.scorer import RelevanceScorer
-from song_discovery.review_helpers import get_active_preference_model, initial_review_status_for_candidate
 from song_discovery.selection import EmptyReleaseError, get_selection_rule_label, select_track_from_release
 
 logger = logging.getLogger("song_discovery.bridge")
@@ -114,7 +113,6 @@ def ingest_kkbox_payload(
         return 400, {"error": "'releases' field must be a list"}
 
     scorer_instance = scorer or RelevanceScorer()
-    preference_model = get_active_preference_model(db)
     ingested_count = 0
     candidates_count = 0
     validation_errors = []
@@ -180,16 +178,8 @@ def ingest_kkbox_payload(
         if not scoring_res.is_candidate:
             continue
 
-        # Upsert candidate
-        initial_status = initial_review_status_for_candidate({
-            "relevance_score": scoring_res.score,
-            "relevance_reasons": scoring_res.reasons,
-            "artist_names": target_track.artist_names_str,
-            "track_title": target_track.title,
-            "release_title": release.title,
-            "platform": release.platform,
-            "release_type": release.release_type,
-        }, model=preference_model)
+        # Upsert candidate with high recall. Local artist-profile screening is
+        # a second pass and never performs live network lookups.
         cid, _ = db.upsert_candidate(
             platform=release.platform,
             release_source_id=release.source_id,
@@ -207,8 +197,21 @@ def ingest_kkbox_payload(
             relevance_score=scoring_res.score,
             relevance_reasons=scoring_res.reasons,
             raw_metadata=target_track.raw_metadata,
-            initial_review_status=initial_status,
+            initial_review_status="pending",
         )
+        db.apply_local_profile_filter_to_candidate(cid)
+        if target_track.artist_names_str and not os.environ.get("PYTEST_CURRENT_TEST"):
+            try:
+                from song_discovery.artist_knowledge import get_artist_collector, split_artist_names
+                collector = get_artist_collector(db)
+                for artist_name in split_artist_names(target_track.artist_names_str):
+                    collector.enqueue_artist(
+                        artist_name=artist_name,
+                        song_title=target_track.title,
+                        album_title=release.title,
+                    )
+            except Exception:
+                pass
         candidates_count += 1
 
     return 200, {

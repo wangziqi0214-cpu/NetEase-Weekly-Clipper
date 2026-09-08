@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -14,8 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from song_discovery.artist_knowledge import (
+    artist_knowledge_needs_refresh,
+    get_artist_collector,
+    normalize_artist_name,
+)
 from song_discovery.db import DiscoveryDB
 from song_discovery.exceptions import LoginRequiredError, PublishError
+from song_discovery.local_profile_filter import PROFILE_REASON_PREFIX
 from song_discovery.preference_learner import PreferenceLearner
 from song_discovery.publisher import NetEasePublisher
 from song_discovery.video_workflow import resume_video_workflow, start_video_workflow
@@ -80,6 +87,20 @@ class ManualMatchRequest(BaseModel):
     matched_artists: str = Field(default="", max_length=200)
     target_release_date: str = Field(default="", max_length=50)
     notes: str = Field(default="", max_length=500)
+
+
+class ArtistKnowledgeCollectRequest(BaseModel):
+    artist_name: str
+    song_title: Optional[str] = ""
+    album_title: Optional[str] = ""
+    force: Optional[bool] = False
+
+
+class ArtistKnowledgeBatchRequest(BaseModel):
+    artists: Optional[List[str]] = None
+    artist_names: Optional[List[str]] = None
+    auto_collect: Optional[bool] = False
+    auto_collect_missing: Optional[bool] = None
 
 
 def _db_path() -> str:
@@ -196,6 +217,37 @@ def _screening(candidate: Dict[str, Any], model: Any) -> tuple[str, List[str]]:
     return visual_tier, list(dict.fromkeys(explanations))[:5]
 
 
+def _local_profile_screening(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    reasons = candidate.get("relevance_reasons") or []
+    if isinstance(reasons, str):
+        try:
+            parsed = json.loads(reasons)
+            reasons = parsed if isinstance(parsed, list) else [reasons]
+        except Exception:
+            reasons = [reasons]
+    profile_reasons = [
+        str(reason)
+        for reason in reasons
+        if str(reason).startswith(PROFILE_REASON_PREFIX)
+    ]
+    status = "not_evaluated"
+    action = "keep_pending"
+    if profile_reasons:
+        reason_text = " ".join(profile_reasons)
+        if "资料未完成" in reason_text or "稀疏" in reason_text:
+            status = "incomplete"
+        elif "未发现明确非目标" in reason_text:
+            status = "completed"
+        elif "明确非目标" in reason_text:
+            status = "completed"
+            action = "machine_filter"
+    return {
+        "status": status,
+        "action": action,
+        "reasons": profile_reasons,
+    }
+
+
 def _raw_record(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": int(candidate["id"]),
@@ -247,6 +299,7 @@ def _serialize_candidate(candidate: Dict[str, Any], groups: Dict[str, List[Dict[
         ),
         "screening_tier": tier,
         "screening_reasons": reasons,
+        "local_profile_screening": _local_profile_screening(candidate),
         "completeness_score": _completeness(candidate),
         "rule_applied": str(candidate.get("selection_rule") or ""),
     }
@@ -395,6 +448,7 @@ def batch_status(payload: BatchStatusRequest) -> Dict[str, Any]:
 def _publication_preview(db: DiscoveryDB) -> Dict[str, Any]:
     playlist_name = generate_default_weekly_playlist_name()
     saved_order = db.get_delivery_order(playlist_name)
+    excluded_ids = set(db.get_delivery_exclusions(playlist_name))
     publisher = NetEasePublisher(base_url="http://127.0.0.1:3000", db=db)
     result = publisher.publish_approved(
         playlist_name=playlist_name,
@@ -403,9 +457,17 @@ def _publication_preview(db: DiscoveryDB) -> Dict[str, Any]:
         ordered_candidate_ids=saved_order,
     )
     items = result.get("resolved_items") or []
+
+    prior_publication = db.get_latest_publication_by_name(playlist_name)
+    published_cand_ids = db.get_already_published_candidate_ids(playlist_name)
+    published_track_ids = db.get_already_published_track_ids(prior_publication["playlist_id"]) if prior_publication else set()
+
     ready_all = []
     seen_ready_ids = set()
     for item in items:
+        cid = int(item["candidate_id"])
+        if cid in excluded_ids:
+            continue
         netease_id = str(item.get("netease_track_id") or "")
         if item.get("is_resolved") and netease_id and netease_id not in seen_ready_ids:
             seen_ready_ids.add(netease_id)
@@ -423,13 +485,33 @@ def _publication_preview(db: DiscoveryDB) -> Dict[str, Any]:
         item["effective_release_date"] = effective
         item["release_gate_reason"] = "本周发行" if release_day and week_start <= release_day <= week_end else ("缺少可靠发行日期" if not release_day else "非本周发行")
         (ready if release_day and week_start <= release_day <= week_end else out_of_week).append(item)
-    ambiguous = [item for item in items if item.get("match_status") == "ambiguous"]
-    unmatched = [item for item in items if item.get("match_status") == "unmatched"]
+
+    ambiguous = [item for item in items if item.get("match_status") == "ambiguous" and int(item["candidate_id"]) not in excluded_ids]
+    unmatched = [item for item in items if item.get("match_status") == "unmatched" and int(item["candidate_id"]) not in excluded_ids]
+
+    # Resolve excluded items for preview presentation
+    excluded_items = []
+    if excluded_ids:
+        cookie_path = str(PROJECT_ROOT / "cookie.txt") if (PROJECT_ROOT / "cookie.txt").exists() else None
+        for cid in sorted(excluded_ids):
+            cand = db.get_candidate_by_id(cid)
+            if cand:
+                res = publisher.resolve_candidate(cand, cookie_file=cookie_path)
+                res["is_excluded_from_delivery"] = True
+                res["is_published"] = False
+                manual_override = db.get_manual_match_override(cid)
+                res["is_manual_override"] = bool(manual_override)
+                res["manual_override"] = manual_override
+                excluded_items.append(res)
+
     for item in items:
         cid = int(item["candidate_id"])
+        nid = str(item.get("netease_track_id") or "")
         manual_override = db.get_manual_match_override(cid)
         item["is_manual_override"] = bool(manual_override)
         item["manual_override"] = manual_override
+        item["is_published"] = bool(cid in published_cand_ids or (nid and nid in published_track_ids))
+
     return {
         **result,
         "playlist_name": playlist_name,
@@ -441,6 +523,8 @@ def _publication_preview(db: DiscoveryDB) -> Dict[str, Any]:
         "release_window": {"start": week_start.isoformat(), "end": week_end.isoformat()},
         "ambiguous_items": ambiguous,
         "unmatched_items": unmatched,
+        "excluded_items": excluded_items,
+        "excluded_count": len(excluded_items),
         "readiness": get_publication_readiness(db),
     }
 
@@ -670,6 +754,36 @@ def publication_order(payload: PublicationOrderRequest) -> Dict[str, Any]:
     return {"success": True, "playlist_name": playlist_name, "candidate_ids": requested}
 
 
+@app.delete("/api/publication/delivery/items/{candidate_id}")
+def exclude_delivery_song(
+    candidate_id: int,
+    playlist_name: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    db = get_db()
+    pl_name = (playlist_name or "").strip() or generate_default_weekly_playlist_name()
+    cand = db.get_candidate_by_id(candidate_id)
+    if not cand:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if db.is_candidate_published_for_playlist(pl_name, candidate_id):
+        raise HTTPException(status_code=400, detail="Cannot exclude already published song from this delivery")
+    db.exclude_delivery_candidate(pl_name, candidate_id)
+    return {"success": True, "playlist_name": pl_name, "candidate_id": candidate_id}
+
+
+@app.post("/api/publication/delivery/items/{candidate_id}/restore")
+def restore_delivery_song(
+    candidate_id: int,
+    playlist_name: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    db = get_db()
+    pl_name = (playlist_name or "").strip() or generate_default_weekly_playlist_name()
+    cand = db.get_candidate_by_id(candidate_id)
+    if not cand:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    db.include_delivery_candidate(pl_name, candidate_id)
+    return {"success": True, "playlist_name": pl_name, "candidate_id": candidate_id}
+
+
 @app.post("/api/publication/export")
 def publication_export() -> Dict[str, Any]:
     db = get_db()
@@ -865,6 +979,141 @@ def learning_safety() -> Dict[str, Any]:
         },
         "gates": gates,
     }
+
+
+@app.get("/api/artist-knowledge")
+def get_artist_knowledge_endpoint(
+    artist: Optional[str] = Query(default=None, max_length=200),
+    artist_name: Optional[str] = Query(default=None, max_length=200),
+    auto_collect: bool = Query(default=False),
+    force: bool = Query(default=False),
+    song_title: Optional[str] = Query(default=""),
+    album_title: Optional[str] = Query(default=""),
+) -> Dict[str, Any]:
+    target_name = (artist or artist_name or "").strip()
+    if not target_name:
+        raise HTTPException(status_code=422, detail="Artist name is required (use 'artist' or 'artist_name')")
+    db = get_db()
+    norm = normalize_artist_name(target_name)
+    rec = db.get_artist_knowledge(norm)
+    if rec:
+        status = rec.get("status")
+        if status in ("pending", "collecting"):
+            return {"found": False, "status": "collecting", "artist_name": norm}
+        if not force:
+            if status == "completed":
+                return {"found": True, "knowledge": rec}
+            if status == "sparse":
+                refresh_queued = False
+                if auto_collect and artist_knowledge_needs_refresh(rec):
+                    refresh_queued = get_artist_collector(db).enqueue_artist(
+                        norm,
+                        song_title=song_title or "",
+                        album_title=album_title or "",
+                        force=True,
+                    )
+                # Return the provisional record immediately so the UI can still
+                # show what is known, while exposing whether a fresh multi-source
+                # search has been queued in the background.
+                return {"found": True, "knowledge": rec, "refresh_queued": refresh_queued}
+            elif status == "failed":
+                if auto_collect:
+                    collector = get_artist_collector(db)
+                    queued = collector.enqueue_artist(
+                        norm,
+                        song_title=song_title or "",
+                        album_title=album_title or "",
+                        force=True,
+                    )
+                    latest = db.get_artist_knowledge(norm)
+                    is_collecting = queued or (latest and latest.get("status") in ("pending", "collecting"))
+                    return {
+                        "found": False,
+                        "status": "collecting" if is_collecting else "pending",
+                        "artist_name": norm,
+                        "error": rec.get("error") or "Previous attempt failed, retrying",
+                    }
+                return {
+                    "found": False,
+                    "status": "failed",
+                    "artist_name": norm,
+                    "error": rec.get("error") or "Research failed",
+                    "knowledge": rec,
+                }
+
+    collector = get_artist_collector(db)
+    if collector.is_active_or_queued(norm):
+        return {"found": False, "status": "collecting", "artist_name": norm}
+
+    if auto_collect:
+        queued = collector.enqueue_artist(
+            norm,
+            song_title=song_title or "",
+            album_title=album_title or "",
+            force=force,
+        )
+        latest = db.get_artist_knowledge(norm)
+        is_collecting = queued or (latest and latest.get("status") in ("pending", "collecting"))
+        return {"found": False, "status": "collecting" if is_collecting else "pending", "artist_name": norm}
+
+    return {"found": False, "status": "not_found", "local_missing": True, "artist_name": norm}
+
+
+@app.post("/api/artist-knowledge/batch")
+def get_artist_knowledge_batch_endpoint(payload: ArtistKnowledgeBatchRequest) -> Dict[str, Any]:
+    db = get_db()
+    targets = payload.artists or payload.artist_names or []
+    results = db.get_artist_knowledge_batch(targets)
+    auto_col = payload.auto_collect if payload.auto_collect_missing is None else payload.auto_collect_missing
+    if auto_col:
+        collector = get_artist_collector(db)
+        for name in targets:
+            norm = normalize_artist_name(name)
+            rec = results.get(name) or results.get(norm)
+            if rec and rec.get("status") in ("pending", "collecting"):
+                continue
+            if not rec or rec.get("status") == "failed" or artist_knowledge_needs_refresh(rec):
+                collector.enqueue_artist(
+                    norm,
+                    force=bool(rec and (rec.get("status") == "failed" or artist_knowledge_needs_refresh(rec))),
+                )
+    return {"results": results, "items": results}
+
+
+@app.post("/api/artist-knowledge/collect")
+def collect_artist_knowledge_endpoint(payload: ArtistKnowledgeCollectRequest) -> Dict[str, Any]:
+    db = get_db()
+    collector = get_artist_collector(db)
+    queued = collector.enqueue_artist(
+        artist_name=payload.artist_name,
+        song_title=payload.song_title or "",
+        album_title=payload.album_title or "",
+        force=bool(payload.force),
+    )
+    return {"success": True, "queued": queued, "artist_name": payload.artist_name}
+
+
+@app.on_event("startup")
+def on_api_startup() -> None:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+
+    def _bg_startup_sync():
+        try:
+            database = get_db()
+            needed = database.get_artists_needing_backfill(limit=100, status_filter="active")
+            if needed:
+                col = get_artist_collector(database)
+                for it in needed:
+                    col.enqueue_artist(
+                        artist_name=it["artist_name"],
+                        song_title=it.get("song_title", ""),
+                        album_title=it.get("album_title", ""),
+                    )
+        except Exception:
+            pass
+
+    threading.Thread(target=_bg_startup_sync, name="ReviewApiStartupSync", daemon=True).start()
 
 
 @app.get("/{path:path}", include_in_schema=False)

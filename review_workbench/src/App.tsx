@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DataEditor, { GridCell, GridCellKind, GridColumn, Item, GridSelection, CompactSelection, Theme, DataEditorRef } from '@glideapps/glide-data-grid';
 import { CheckCircle2, XCircle, RotateCcw, Play, Pause, ExternalLink, Layers, Sparkles, Search, Disc3, PanelRightClose, PanelRightOpen, Music2, Rocket, ShieldAlert } from 'lucide-react';
-import { CandidateItem, DatabaseStats, ReviewStatus } from './types';
-import { fetchCandidates, fetchStats, updateCandidateBatchStatus } from './api';
+import { ArtistKnowledge, CandidateItem, DatabaseStats, ReviewStatus } from './types';
+import { fetchCandidates, fetchStats, updateCandidateBatchStatus, triggerCollectArtistKnowledge, fetchArtistKnowledge } from './api';
+import { ArtistHoverCardContent, getOrFetchKnowledge, clearKnowledgeCache } from './ArtistHoverCard';
 import DeliveryWorkspace from './DeliveryWorkspace';
 import SafetyPanel from './SafetyPanel';
 
@@ -35,6 +36,129 @@ export default function App() {
   const [playingTrack,setPlayingTrack]=useState<CandidateItem|null>(null); const [isPlaying,setIsPlaying]=useState(false); const audioRef=useRef<HTMLAudioElement|null>(null);
   const dataEditorRef=useRef<DataEditorRef|null>(null); const gridHostRef=useRef<HTMLDivElement|null>(null); const searchRef=useRef<HTMLInputElement|null>(null); const textOverlayRef=useRef<HTMLInputElement|null>(null);
   const [contextMenu,setContextMenu]=useState<ContextMenuState|null>(null); const [textOverlay,setTextOverlay]=useState<TextOverlayState|null>(null); const [toast,setToast]=useState('');
+  const [tableHoveredArtist, setTableHoveredArtist] = useState<{
+    artistName: string;
+    songTitle?: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [hoverKnowledge, setHoverKnowledge] = useState<ArtistKnowledge | null>(null);
+  const [hoverLoading, setHoverLoading] = useState(false);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverPollIntervalRef = useRef<number | null>(null);
+
+  const stopHoverPolling = useCallback(() => {
+    if (hoverPollIntervalRef.current) {
+      window.clearInterval(hoverPollIntervalRef.current);
+      hoverPollIntervalRef.current = null;
+    }
+  }, []);
+
+  const startHoverPolling = useCallback((artistName: string, songTitle: string = '') => {
+    stopHoverPolling();
+    let pollCount = 0;
+    hoverPollIntervalRef.current = window.setInterval(async () => {
+      pollCount++;
+      try {
+        const res = await fetchArtistKnowledge(artistName, false, songTitle || '', '');
+        if (res.found && res.knowledge && (res.knowledge.status === 'completed' || res.knowledge.status === 'sparse')) {
+          setHoverKnowledge(res.knowledge);
+          stopHoverPolling();
+          return;
+        }
+        if (res.status === 'failed' || res.knowledge?.status === 'failed') {
+          setHoverKnowledge((res.knowledge || {
+            artist_name: artistName,
+            display_name: artistName,
+            factual_summary: '',
+            sources: [],
+            uncertainty: 'high',
+            identity_context: {},
+            status: 'failed',
+            error: (res as any)?.error || '收集失败',
+          }) as ArtistKnowledge);
+          stopHoverPolling();
+          return;
+        }
+      } catch {
+        // Continue polling
+      }
+      if (pollCount >= 45) {
+        stopHoverPolling();
+      }
+    }, 2000);
+  }, [stopHoverPolling]);
+
+  const handleCollectTableArtist = useCallback(async () => {
+    if (!tableHoveredArtist) return;
+    const { artistName, songTitle } = tableHoveredArtist;
+    setHoverLoading(true);
+    stopHoverPolling();
+    clearKnowledgeCache(artistName);
+    try {
+      await triggerCollectArtistKnowledge(artistName, songTitle || '', '', true);
+      const collectingRecord: ArtistKnowledge = {
+        artist_name: artistName,
+        display_name: artistName,
+        factual_summary: '',
+        sources: [],
+        uncertainty: 'medium',
+        identity_context: {},
+        status: 'collecting',
+      };
+      setHoverKnowledge(collectingRecord);
+      setHoverLoading(false);
+      startHoverPolling(artistName, songTitle || '');
+    } catch (err: any) {
+      setHoverLoading(false);
+      setHoverKnowledge({
+        artist_name: artistName,
+        display_name: artistName,
+        factual_summary: '',
+        sources: [],
+        uncertainty: 'high',
+        identity_context: {},
+        status: 'failed',
+        error: String(err?.message || err || '触发后台收集失败'),
+      });
+    }
+  }, [tableHoveredArtist, stopHoverPolling, startHoverPolling]);
+
+  useEffect(() => {
+    return () => {
+      stopHoverPolling();
+    };
+  }, [stopHoverPolling]);
+
+  const handleItemHovered = useCallback((args: any) => {
+    if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    if (args.kind === 'cell' && args.location && COLUMNS[args.location[0]]?.id === 'artist_names') {
+      const candidate = candidates[args.location[1]];
+      if (candidate?.artist_names) {
+        const host = gridHostRef.current?.getBoundingClientRect();
+        const x = (host?.left || 0) + (args.bounds?.x || 0);
+        const y = (host?.top || 0) + (args.bounds?.y || 0) + (args.bounds?.height || 0);
+        const artist = candidate.artist_names;
+        const song = candidate.title;
+        hoverTimerRef.current = window.setTimeout(() => {
+          setTableHoveredArtist({ artistName: artist, songTitle: song, x, y });
+          setHoverLoading(true);
+          void getOrFetchKnowledge(artist, song).then(k => {
+            setHoverKnowledge(k);
+            setHoverLoading(false);
+            if (k?.status === 'collecting') {
+              startHoverPolling(artist, song);
+            }
+          });
+        }, 250);
+        return;
+      }
+    }
+    hoverTimerRef.current = window.setTimeout(() => {
+      setTableHoveredArtist(null);
+      stopHoverPolling();
+    }, 150);
+  }, [candidates, stopHoverPolling]);
 
   const loadData=useCallback(async()=>{setLoading(true);setError(null);try{const [page,summary]=await Promise.all([fetchCandidates({platform:platformFilter,status:statusFilter,tier:tierFilter,keyword,dedup:enableDedup}),fetchStats()]);setCandidates(page.items);setViewMeta({rawCount:page.raw_count,hiddenIncomplete:page.hidden_incomplete});setStats(summary);}catch(err){setError(err instanceof Error?err.message:'加载候选歌曲失败');}finally{setLoading(false);}},[platformFilter,statusFilter,tierFilter,keyword,enableDedup]);
   useEffect(()=>{void loadData();},[loadData]);
@@ -112,7 +236,7 @@ export default function App() {
         <div ref={gridHostRef} className="relative flex-1 min-h-0 overflow-hidden">
           {loading&&<Overlay><Disc3 className="w-5 h-5 animate-spin"/><span>加载候选数据与跨平台聚合中...</span></Overlay>}
           {error&&<div className="absolute inset-0 bg-rose-950/80 flex flex-col items-center justify-center z-10 text-rose-200"><p className="font-semibold">{error}</p><button onClick={()=>void loadData()} className="mt-3 px-3 py-1 bg-rose-800 text-white rounded text-xs">重试加载</button></div>}
-          <DataEditor ref={dataEditorRef} theme={workbenchGridTheme} columns={COLUMNS} rows={candidates.length} getCellContent={getCellContent} gridSelection={gridSelection} onGridSelectionChange={setGridSelection} onCellContextMenu={openContextMenu} onCellClicked={(cell,event)=>{if(event.isDoubleClick)openTextSelector(cell);}} onPaste={false} rowHeight={38} headerHeight={32} smoothScrollX smoothScrollY isDraggable={false} rowMarkers="clickable-number" rowSelect="multi" columnSelect="none" rangeSelect="rect" fillHandle={false} width="100%" height="100%"/>
+          <DataEditor ref={dataEditorRef} theme={workbenchGridTheme} columns={COLUMNS} rows={candidates.length} getCellContent={getCellContent} gridSelection={gridSelection} onGridSelectionChange={setGridSelection} onCellContextMenu={openContextMenu} onCellClicked={(cell,event)=>{if(event.isDoubleClick)openTextSelector(cell);}} onItemHovered={handleItemHovered} onPaste={false} rowHeight={38} headerHeight={32} smoothScrollX smoothScrollY isDraggable={false} rowMarkers="clickable-number" rowSelect="multi" columnSelect="none" rangeSelect="rect" fillHandle={false} width="100%" height="100%"/>
         </div>
       </div>
       {isDrawerOpen&&<aside className="w-96 bg-[#151722] border-l border-[#232736] flex flex-col h-full overflow-y-auto shrink-0 text-xs select-text">{activeCandidate?<Inspector candidate={activeCandidate} updateStatus={updateStatus}/>:<div className="h-full flex flex-col items-center justify-center text-slate-500 p-6 text-center"><Music2 className="w-8 h-8 mb-2 opacity-40"/><p>在表格中点击任意歌曲，查看跨平台数据比对与机筛特征。</p></div>}</aside>}
@@ -136,6 +260,31 @@ export default function App() {
     {textOverlay&&<input ref={textOverlayRef} readOnly value={textOverlay.text} onBlur={()=>setTextOverlay(null)} onKeyDown={event=>{if(event.key==='Escape'||event.key==='Enter'){event.preventDefault();setTextOverlay(null);dataEditorRef.current?.focus();}}} className="fixed z-40 rounded-sm border border-blue-500 bg-[#11141d] px-2 text-xs text-slate-100 shadow-xl outline-none select-text" style={{left:textOverlay.x,top:textOverlay.y,width:textOverlay.width,height:textOverlay.height}}/>}
     {toast&&<div className="fixed bottom-20 left-1/2 z-[60] -translate-x-1/2 rounded border border-[#3a4259] bg-[#1a1e2a] px-3 py-2 text-xs text-slate-200 shadow-xl">{toast}</div>}
 
+    {tableHoveredArtist && (
+      <div
+        className="fixed z-50 pointer-events-auto shadow-2xl"
+        style={{
+          left: Math.min(tableHoveredArtist.x, window.innerWidth - 360),
+          top: Math.min(tableHoveredArtist.y + 4, window.innerHeight - 280),
+        }}
+        onMouseEnter={() => {
+          if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+        }}
+        onMouseLeave={() => {
+          setTableHoveredArtist(null);
+          stopHoverPolling();
+        }}
+      >
+        <ArtistHoverCardContent
+          artistName={tableHoveredArtist.artistName}
+          knowledge={hoverKnowledge}
+          loading={hoverLoading}
+          onCollect={handleCollectTableArtist}
+          onRetry={handleCollectTableArtist}
+        />
+      </div>
+    )}
+
     <footer className="h-15 bg-[#12141c] border-t border-[#232736] px-4 flex items-center justify-between shrink-0 text-xs">
       <div className="flex items-center space-x-3 w-1/3 min-w-0"><button onClick={()=>activeCandidate&&togglePlay(activeCandidate)} className="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center shadow active:scale-95 shrink-0">{isPlaying?<Pause className="w-4 h-4 fill-current"/>:<Play className="w-4 h-4 fill-current ml-0.5"/>}</button><div className="min-w-0 flex-1"><div className="text-slate-200 font-semibold truncate">{playingTrack?`${playingTrack.title} - ${playingTrack.artist_names}`:'未播放音频'}</div><div className="text-slate-500 font-mono text-[11px] truncate">{playingTrack?`来源: ${playingTrack.platforms_display} | 时长: ${formatDuration(playingTrack.duration_ms)}`:'按 [Space] 快速试听选中歌曲'}</div></div></div>
       <div className="flex items-center space-x-2 w-1/3 max-w-sm"><span className="font-mono text-slate-500 text-[10px]">00:00</span><div className="flex-1 h-1.5 bg-[#232736] rounded-full overflow-hidden"><div className={`h-full bg-blue-500 ${isPlaying?'w-2/5':'w-0'}`}/></div><span className="font-mono text-slate-500 text-[10px]">{playingTrack?formatDuration(playingTrack.duration_ms):'--:--'}</span></div>
@@ -153,9 +302,115 @@ function MenuItem({label,shortcut,tone='',onClick}:{label:string;shortcut?:strin
 function KeyCap({keyName,label,tone='' }:{keyName:string;label:string;tone?:string}){return <div className="flex items-center space-x-1"><span className="kbd-chip">{keyName}</span><span className={tone}>{label}</span></div>;}
 function Overlay({children}:{children:React.ReactNode}){return <div className="absolute inset-0 bg-[#090a0f]/60 flex items-center justify-center z-10"><div className="flex items-center space-x-2 text-blue-400 font-mono text-sm">{children}</div></div>;}
 
+function ArtistDrawerCard({
+  artistName,
+  songTitle,
+  albumTitle,
+}: {
+  artistName: string;
+  songTitle?: string;
+  albumTitle?: string;
+}) {
+  const [knowledge, setKnowledge] = useState<ArtistKnowledge | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!artistName) return;
+    setLoading(true);
+    void getOrFetchKnowledge(artistName, songTitle, albumTitle).then(data => {
+      setKnowledge(data);
+      setLoading(false);
+    });
+  }, [artistName, songTitle, albumTitle]);
+
+  const identity = knowledge?.identity_context || {};
+  const genres = Array.isArray(identity.genre)
+    ? identity.genre
+    : identity.genre
+    ? [String(identity.genre)]
+    : [];
+  const unc = knowledge?.uncertainty || 'medium';
+  const isSparse = knowledge?.status === 'sparse' || unc === 'high';
+
+  return (
+    <div className="bg-[#1a1d2a] p-3 rounded-lg border border-[#272b3d] space-y-2">
+      <div className="flex items-center justify-between text-slate-300 font-semibold border-b border-[#282d3f] pb-1.5">
+        <div className="flex items-center space-x-1.5">
+          <Music2 className="w-3.5 h-3.5 text-blue-400" />
+          <span>本地艺人背景知识</span>
+        </div>
+        {knowledge && (
+          <span
+            className={`font-mono text-[10px] px-1.5 py-0.5 rounded border ${
+              unc === 'low'
+                ? 'border-emerald-700/60 bg-emerald-950/40 text-emerald-300'
+                : isSparse
+                ? 'border-amber-700/60 bg-amber-950/40 text-amber-300'
+                : 'border-cyan-700/60 bg-cyan-950/40 text-cyan-300'
+            }`}
+          >
+            {unc === 'low' ? '✓ 高置信' : isSparse ? '⚠️ 资料稀疏' : 'ℹ 部分收录'}
+          </span>
+        )}
+      </div>
+      {loading && !knowledge ? (
+        <div className="flex items-center gap-2 py-2 text-cyan-400 text-xs">
+          <Disc3 className="w-3.5 h-3.5 animate-spin" />
+          <span>正在检索本地资料库…</span>
+        </div>
+      ) : (
+        <div className="space-y-2 pt-1 text-xs">
+          <div className="text-slate-300 leading-relaxed text-[11px]">
+            {knowledge?.factual_summary || '暂无详细公开背景信息；该艺人可能属于早期独立发行或地下厂牌（不作为排除依据）。'}
+          </div>
+          {(identity.origin || identity.type || genres.length > 0) && (
+            <div className="flex flex-wrap gap-1 pt-0.5">
+              {identity.origin && (
+                <span className="px-1.5 py-0.5 bg-[#24293c] text-slate-300 rounded text-[10px]">
+                  📍 {identity.origin}
+                </span>
+              )}
+              {identity.type && (
+                <span className="px-1.5 py-0.5 bg-[#24293c] text-slate-300 rounded text-[10px]">
+                  👤 {identity.type}
+                </span>
+              )}
+              {genres.slice(0, 3).map((g: string, i: number) => (
+                <span key={i} className="px-1.5 py-0.5 bg-[#1b2130] border border-[#2e374f] text-blue-300 rounded text-[10px]">
+                  {g}
+                </span>
+              ))}
+            </div>
+          )}
+          {knowledge?.sources && knowledge.sources.length > 0 && (
+            <div className="pt-1.5 border-t border-[#23283c]">
+              <span className="text-[10px] text-slate-500">核验来源 ({knowledge.sources.length}):</span>
+              <div className="mt-1 flex flex-col gap-0.5">
+                {knowledge.sources.slice(0, 2).map((url, i) => (
+                  <a
+                    key={i}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] text-cyan-400 hover:text-cyan-300 truncate flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                    <span className="truncate">{url}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Inspector({candidate,updateStatus}:{candidate:CandidateItem;updateStatus:(status:ReviewStatus)=>Promise<void>}){
   return <div className="p-4 space-y-4">
     <div className="flex space-x-3 items-start bg-[#1a1d2a] p-3 rounded-lg border border-[#272b3d]"><img src={candidate.cover_url||'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="%2364748b" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>'} className="w-16 h-16 rounded object-cover border border-[#333a4f] shrink-0 bg-slate-900"/><div className="flex-1 min-w-0"><div className="font-bold text-sm text-slate-100 truncate">{candidate.title}</div><div className="text-slate-400 truncate mt-0.5">{candidate.artist_names}</div><div className="flex items-center space-x-2 mt-2"><span className="px-1.5 py-0.5 bg-[#23283a] text-slate-300 rounded font-mono text-[10px]">ID: #{candidate.id}</span><span className={`px-1.5 py-0.5 rounded font-mono text-[10px] status-${candidate.status}`}>{candidate.status}</span></div></div></div>
+    <ArtistDrawerCard artistName={candidate.artist_names} songTitle={candidate.title} albumTitle={candidate.album_title} />
     <div className="bg-[#1a1d2a] p-3 rounded-lg border border-[#272b3d] space-y-2"><div className="flex items-center justify-between text-slate-300 font-semibold border-b border-[#282d3f] pb-1.5"><div className="flex items-center space-x-1.5"><Sparkles className="w-3.5 h-3.5 text-blue-400"/><span>机筛分层与置信度特征</span></div><span className="font-mono text-blue-400">完备度: {candidate.completeness_score}/6</span></div><div className="space-y-1.5 pt-1"><div className="flex items-center justify-between"><span className="text-slate-400">机筛分级:</span><span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${candidate.screening_tier==='TIER_1_HOT'?'tier-badge-1':candidate.screening_tier==='TIER_2_RULE'?'tier-badge-2':candidate.screening_tier==='TIER_3_ATTENTION'?'tier-badge-3':'tier-badge-4'}`}>{candidate.screening_tier}</span></div><div className="flex items-start justify-between"><span className="text-slate-400">命中规则:</span><span className="text-slate-200 text-right font-mono max-w-[200px]">{candidate.rule_applied||'默认规则'}</span></div><div className="text-slate-400"><span>特征标签:</span><div className="flex flex-wrap gap-1 mt-1">{candidate.screening_reasons?.map((reason,i)=><span key={i} className="px-1.5 py-0.5 bg-[#24293c] text-slate-300 rounded text-[10px]">{reason}</span>)}</div></div></div></div>
     <div className="bg-[#1a1d2a] p-3 rounded-lg border border-[#272b3d] space-y-2"><div className="text-slate-300 font-semibold border-b border-[#282d3f] pb-1.5 flex items-center justify-between"><span>跨平台多源比对 ({candidate.raw_candidates?.length||1} 源)</span><span className="text-slate-500 font-mono text-[10px]">来源追溯</span></div><div className="space-y-2 pt-1">{candidate.raw_candidates?.map(raw=><div key={raw.id} className="p-2 bg-[#12141d] rounded border border-[#232738] space-y-1"><div className="flex items-center justify-between"><span className={`px-1.5 py-0.5 rounded font-semibold text-[10px] badge-${raw.platform}`}>{raw.platform.toUpperCase()}</span><span className="font-mono text-slate-500 text-[10px]">Source ID: {raw.source_id}</span></div><div className="text-slate-200 font-medium truncate">{raw.title}</div><div className="text-slate-400 text-[11px] truncate">{raw.artist_names} · 《{raw.album_title||'无专辑'}》</div><div className="flex items-center justify-between text-[10px] text-slate-500 pt-1"><span>{raw.release_date||'未知日期'}</span>{raw.source_url&&<a href={raw.source_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 flex items-center space-x-0.5"><span>原曲直链</span><ExternalLink className="w-2.5 h-2.5"/></a>}</div></div>)}</div></div>
     <div className="grid grid-cols-2 gap-2 pt-1"><button onClick={()=>void updateStatus('approved')} className="flex items-center justify-center space-x-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold"><CheckCircle2 className="w-4 h-4"/><span>通过此单曲</span></button><button onClick={()=>void updateStatus('rejected')} className="flex items-center justify-center space-x-1 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded font-semibold"><XCircle className="w-4 h-4"/><span>否决此单曲</span></button></div>

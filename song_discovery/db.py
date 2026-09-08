@@ -20,9 +20,10 @@ class DiscoveryDB:
         self.init_db()
 
     def get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
         return conn
 
     def init_db(self) -> None:
@@ -195,6 +196,31 @@ class DiscoveryDB:
                 )
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS delivery_exclusions (
+                    playlist_name TEXT NOT NULL,
+                    candidate_id INTEGER NOT NULL,
+                    excluded_at TEXT NOT NULL,
+                    PRIMARY KEY(playlist_name, candidate_id),
+                    FOREIGN KEY(candidate_id) REFERENCES candidates(id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS artist_knowledge (
+                    artist_name TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    factual_summary TEXT NOT NULL DEFAULT '',
+                    sources TEXT NOT NULL DEFAULT '[]',
+                    uncertainty TEXT NOT NULL DEFAULT 'low',
+                    identity_context TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    search_queries TEXT NOT NULL DEFAULT '[]',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_checked_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS video_workflow_jobs (
                     job_id TEXT PRIMARY KEY,
                     publication_id TEXT,
@@ -213,6 +239,8 @@ class DiscoveryDB:
             # Indices
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_releases_platform_source ON releases(platform, source_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(review_status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_delivery_exclusions_playlist ON delivery_exclusions(playlist_name)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_artist_knowledge_status ON artist_knowledge(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_candidates_platform ON candidates(platform)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_candidates_score ON candidates(relevance_score)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pub_tracks_playlist ON published_tracks(netease_track_id)")
@@ -300,6 +328,425 @@ class DiscoveryDB:
         with self.get_connection() as conn:
             row = conn.execute("SELECT candidate_ids FROM delivery_orders WHERE playlist_name=?", (playlist_name,)).fetchone()
         return [int(value) for value in json.loads(row["candidate_ids"])] if row else []
+
+    def exclude_delivery_candidate(self, playlist_name: str, candidate_id: int) -> None:
+        """Persistently exclude a candidate from a specific weekly delivery and update order."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.get_connection() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO delivery_exclusions (playlist_name, candidate_id, excluded_at) VALUES (?, ?, ?)",
+                (playlist_name, int(candidate_id), now),
+            )
+            row = conn.execute("SELECT candidate_ids FROM delivery_orders WHERE playlist_name=?", (playlist_name,)).fetchone()
+            if row:
+                current_order = [int(v) for v in json.loads(row["candidate_ids"])]
+                new_order = [cid for cid in current_order if cid != int(candidate_id)]
+                if len(new_order) != len(current_order):
+                    conn.execute(
+                        "UPDATE delivery_orders SET candidate_ids=?, updated_at=? WHERE playlist_name=?",
+                        (json.dumps(new_order), now, playlist_name),
+                    )
+            conn.commit()
+
+    def include_delivery_candidate(self, playlist_name: str, candidate_id: int) -> None:
+        """Restore an excluded candidate to this weekly delivery."""
+        with self.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM delivery_exclusions WHERE playlist_name=? AND candidate_id=?",
+                (playlist_name, int(candidate_id)),
+            )
+            conn.commit()
+
+    def get_delivery_exclusions(self, playlist_name: str) -> List[int]:
+        """Return list of candidate IDs excluded from this weekly delivery."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT candidate_id FROM delivery_exclusions WHERE playlist_name=? ORDER BY excluded_at ASC",
+                (playlist_name,),
+            ).fetchall()
+        return [int(row["candidate_id"]) for row in rows]
+
+    def is_candidate_published_for_playlist(self, playlist_name: str, candidate_id: int) -> bool:
+        """Check if candidate has already been recorded as published for this playlist."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM published_tracks pt
+                JOIN publications p ON pt.publication_id = p.publication_id
+                WHERE (p.playlist_name = ? OR p.playlist_id = ?)
+                  AND pt.candidate_id = ?
+                  AND pt.added_to_playlist = 1
+                LIMIT 1
+                """,
+                (playlist_name, playlist_name, int(candidate_id)),
+            ).fetchone()
+            return bool(row)
+
+    def get_already_published_candidate_ids(self, playlist_name: str) -> Set[int]:
+        """Get set of candidate_ids already added to this playlist."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT pt.candidate_id
+                FROM published_tracks pt
+                JOIN publications p ON pt.publication_id = p.publication_id
+                WHERE (p.playlist_name = ? OR p.playlist_id = ?)
+                  AND pt.added_to_playlist = 1
+                """,
+                (playlist_name, playlist_name),
+            ).fetchall()
+            return {int(r["candidate_id"]) for r in rows if r["candidate_id"]}
+
+    def upsert_artist_knowledge(self, knowledge: Dict[str, Any]) -> None:
+        """Insert or update artist knowledge entry."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sources = knowledge.get("sources") or []
+        sources_json = json.dumps(sources, ensure_ascii=False) if isinstance(sources, list) else str(sources)
+        identity = knowledge.get("identity_context") or {}
+        identity_json = json.dumps(identity, ensure_ascii=False) if isinstance(identity, dict) else str(identity)
+        queries = knowledge.get("search_queries") or []
+        queries_json = json.dumps(queries, ensure_ascii=False) if isinstance(queries, list) else str(queries)
+
+        with self.get_connection() as conn:
+            incoming_name = str(knowledge["artist_name"]).strip()
+            # Keep one record when the same artist arrives as e.g. "schoolgirl
+            # byebye", "Schoolgirl Byebye", or "schoolgirl-byebye".  The
+            # original stored spelling is retained for display, while lookups
+            # remain case/spacing/hyphen insensitive.
+            collapsed = " ".join(incoming_name.split()).lower()
+            existing = conn.execute(
+                """
+                SELECT artist_name FROM artist_knowledge
+                WHERE LOWER(artist_name) = LOWER(?)
+                   OR LOWER(display_name) = LOWER(?)
+                   OR REPLACE(REPLACE(LOWER(artist_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                   OR REPLACE(REPLACE(LOWER(display_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                LIMIT 1
+                """,
+                (incoming_name, incoming_name, collapsed, collapsed),
+            ).fetchone()
+            target_name = str(existing["artist_name"]) if existing else incoming_name
+            values = (
+                target_name,
+                knowledge.get("display_name", incoming_name),
+                knowledge.get("factual_summary", ""),
+                sources_json,
+                knowledge.get("uncertainty", "low"),
+                identity_json,
+                knowledge.get("status", "completed"),
+                queries_json,
+                knowledge.get("error", ""),
+                knowledge.get("created_at", now),
+                now,
+                now,
+            )
+            conn.execute(
+                """
+                INSERT INTO artist_knowledge (
+                    artist_name, display_name, factual_summary, sources,
+                    uncertainty, identity_context, status, search_queries,
+                    error, created_at, updated_at, last_checked_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artist_name) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    factual_summary=excluded.factual_summary,
+                    sources=excluded.sources,
+                    uncertainty=excluded.uncertainty,
+                    identity_context=excluded.identity_context,
+                    status=excluded.status,
+                    search_queries=excluded.search_queries,
+                    error=excluded.error,
+                    updated_at=excluded.updated_at,
+                    last_checked_at=excluded.last_checked_at
+                """,
+                values,
+            )
+            conn.commit()
+        try:
+            self.apply_local_profile_filter_for_artist(target_name)
+        except Exception:
+            # Profile collection must never make knowledge persistence fail.
+            pass
+
+    def mark_artist_pending(self, artist_name: str, force: bool = False) -> bool:
+        """Atomically claim an artist for background knowledge collection by writing status='pending'.
+
+        - Missing record: inserts record with status='pending'.
+        - Failed record: updates status='pending', preserving all existing profile fields.
+        - Recent pending/collecting: atomic check avoids duplicate dispatch and returns False.
+        - Stale pending: reclaimed after the lease window so interrupted jobs can retry.
+        - Completed/sparse: if not force and not needing refresh, returns False.
+          If forced or needing refresh, updates status='pending' (preserving profile fields) and returns True.
+        Returns True if successfully marked/claimed for dispatch, False otherwise.
+        """
+        if not artist_name:
+            return False
+        incoming_name = artist_name.strip()
+        if not incoming_name:
+            return False
+
+        from song_discovery.artist_knowledge import artist_knowledge_needs_refresh
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        collapsed = " ".join(incoming_name.split()).lower()
+
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT artist_name, display_name, factual_summary, sources,
+                       uncertainty, identity_context, status, search_queries,
+                       error, created_at, updated_at, last_checked_at
+                FROM artist_knowledge
+                WHERE LOWER(artist_name) = LOWER(?)
+                   OR LOWER(display_name) = LOWER(?)
+                   OR REPLACE(REPLACE(LOWER(artist_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                   OR REPLACE(REPLACE(LOWER(display_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                LIMIT 1
+                """,
+                (incoming_name, incoming_name, collapsed, collapsed),
+            ).fetchone()
+
+            if not existing:
+                cur = conn.execute(
+                    """
+                    INSERT INTO artist_knowledge (
+                        artist_name, display_name, factual_summary, sources,
+                        uncertainty, identity_context, status, search_queries,
+                        error, created_at, updated_at, last_checked_at
+                    ) VALUES (?, ?, '', '[]', 'low', '{}', 'pending', '[]', '', ?, ?, ?)
+                    ON CONFLICT(artist_name) DO NOTHING
+                    """,
+                    (incoming_name, incoming_name, now, now, now),
+                )
+                if cur.rowcount > 0:
+                    conn.commit()
+                    return True
+                existing = conn.execute(
+                    "SELECT status FROM artist_knowledge WHERE artist_name = ?",
+                    (incoming_name,),
+                ).fetchone()
+                if not existing:
+                    return False
+
+            existing_dict = dict(existing)
+            status = str(existing_dict.get("status") or "")
+
+            if status == "collecting":
+                return False
+
+            reclaim_pending = False
+            pending_marker: Optional[str] = None
+            if status == "pending":
+                # A pending row is normally an in-flight/queued job.  If the
+                # process was killed or AGy failed before the worker could
+                # persist a terminal record, it would otherwise remain stuck
+                # forever and never be picked up by the daemon again.  Keep a
+                # generous lease (well above the normal 10-minute AGy timeout)
+                # so live jobs are still deduplicated, while stale rows can be
+                # reclaimed after a restart or interrupted run.
+                lease_seconds = max(
+                    60,
+                    int(os.environ.get("ARTIST_PENDING_RECLAIM_SECONDS", str(6 * 60 * 60))),
+                )
+                marker = existing_dict.get("last_checked_at") or existing_dict.get("updated_at")
+                pending_marker = str(marker) if marker else None
+                stale = True
+                if marker:
+                    try:
+                        marked_at = datetime.fromisoformat(str(marker).replace("Z", "+00:00"))
+                        if marked_at.tzinfo is None:
+                            marked_at = marked_at.replace(tzinfo=timezone.utc)
+                        stale = (datetime.now(timezone.utc) - marked_at).total_seconds() >= lease_seconds
+                    except (TypeError, ValueError):
+                        stale = True
+                if not stale:
+                    return False
+                reclaim_pending = True
+
+            if not force and not artist_knowledge_needs_refresh(existing_dict):
+                return False
+
+            target_key = str(existing_dict["artist_name"])
+            if reclaim_pending:
+                # Compare the stale marker as well as the status so two
+                # supervisor/API processes cannot reclaim the same row at the
+                # same time after it has already been refreshed.
+                cur = conn.execute(
+                    """
+                    UPDATE artist_knowledge
+                    SET status = 'pending', updated_at = ?, last_checked_at = ?
+                    WHERE artist_name = ?
+                      AND status = 'pending'
+                      AND (last_checked_at = ? OR updated_at = ?)
+                    """,
+                    (now, now, target_key, pending_marker, pending_marker),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    UPDATE artist_knowledge
+                    SET status = 'pending', updated_at = ?, last_checked_at = ?
+                    WHERE artist_name = ? AND status NOT IN ('pending', 'collecting')
+                    """,
+                    (now, now, target_key),
+                )
+            if cur.rowcount > 0:
+                conn.commit()
+                return True
+            return False
+
+    def get_artist_knowledge(self, artist_name: str) -> Optional[Dict[str, Any]]:
+        """Retrieve artist knowledge by exact name, case-insensitive match, or variants."""
+        if not artist_name:
+            return None
+        stripped = artist_name.strip()
+        with self.get_connection() as conn:
+            # 1. Primary: exact or case-insensitive match on artist_name or display_name
+            row = conn.execute(
+                "SELECT * FROM artist_knowledge WHERE LOWER(artist_name) = LOWER(?) OR LOWER(display_name) = LOWER(?) LIMIT 1",
+                (stripped, stripped),
+            ).fetchone()
+
+            # 2. Secondary: relaxed spacing/hyphen variant match
+            if not row:
+                collapsed = " ".join(stripped.split()).lower()
+                row = conn.execute(
+                    """
+                    SELECT * FROM artist_knowledge
+                    WHERE REPLACE(REPLACE(LOWER(artist_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                       OR REPLACE(REPLACE(LOWER(display_name), ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                    LIMIT 1
+                    """,
+                    (collapsed, collapsed),
+                ).fetchone()
+
+        if not row:
+            return None
+        res = dict(row)
+        res["sources"] = json.loads(res.get("sources") or "[]")
+        res["identity_context"] = json.loads(res.get("identity_context") or "{}")
+        res["search_queries"] = json.loads(res.get("search_queries") or "[]")
+        return res
+
+    def get_artist_knowledge_batch(self, artist_names: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Batch fetch artist knowledge entries for a list of artist names (case-insensitive)."""
+        if not artist_names:
+            return {}
+        cleaned = [name.strip() for name in artist_names if name and name.strip()]
+        if not cleaned:
+            return {}
+        placeholders = ",".join("?" for _ in cleaned)
+        lowered_list = [c.lower() for c in cleaned]
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM artist_knowledge WHERE LOWER(artist_name) IN ({placeholders}) OR LOWER(display_name) IN ({placeholders})",
+                lowered_list + lowered_list,
+            ).fetchall()
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            data = dict(row)
+            data["sources"] = json.loads(data.get("sources") or "[]")
+            data["identity_context"] = json.loads(data.get("identity_context") or "{}")
+            data["search_queries"] = json.loads(data.get("search_queries") or "[]")
+            result[data["artist_name"]] = data
+            result[data["display_name"]] = data
+            result[data["artist_name"].lower()] = data
+            result[data["display_name"].lower()] = data
+            for orig in cleaned:
+                if orig.lower() in (data["artist_name"].lower(), data["display_name"].lower()):
+                    result[orig] = data
+        return result
+
+    def get_artists_needing_backfill(
+        self,
+        limit: Optional[int] = 50,
+        force: bool = False,
+        specific_artist: Optional[str] = None,
+        status_filter: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return candidate artists lacking complete artist knowledge.
+
+        Prioritizes pending review and approved candidates over noise.
+        Correctly decomposes compound artist names and skips already completed records.
+        """
+        with self.get_connection() as conn:
+            if specific_artist:
+                row = conn.execute(
+                    """
+                    SELECT artist_names, track_title, release_title
+                    FROM candidates
+                    WHERE artist_names LIKE ?
+                    LIMIT 1
+                    """,
+                    (f"%{specific_artist}%",),
+                ).fetchone()
+                return [{
+                    "artist_name": specific_artist,
+                    "song_title": row["track_title"] if row else "",
+                    "album_title": row["release_title"] if row else "",
+                }]
+
+            where_clauses = ["artist_names != ''"]
+            params: List[Any] = []
+
+            if status_filter == "active":
+                where_clauses.append("review_status IN ('pending', 'approved')")
+            elif status_filter in ("pending", "approved", "machine_filtered", "rejected"):
+                where_clauses.append("review_status = ?")
+                params.append(status_filter)
+
+            where_sql = " AND ".join(where_clauses)
+            query = f"""
+                SELECT artist_names, track_title, release_title, review_status
+                FROM candidates
+                WHERE {where_sql}
+                ORDER BY
+                    CASE review_status
+                        WHEN 'pending' THEN 1
+                        WHEN 'approved' THEN 2
+                        WHEN 'machine_filtered' THEN 3
+                        ELSE 4
+                    END,
+                    id DESC
+            """
+            rows = conn.execute(query, params).fetchall()
+
+        from song_discovery.artist_knowledge import (
+            artist_knowledge_needs_refresh,
+            normalize_artist_name,
+            split_artist_names,
+        )
+
+        seen = set()
+        items = []
+        for r in rows:
+            raw_name = (r["artist_names"] or "").strip()
+            if not raw_name:
+                continue
+            split_names = split_artist_names(raw_name)
+            for name in split_names:
+                name_clean = normalize_artist_name(name)
+                if not name_clean:
+                    continue
+                norm_key = name_clean.lower()
+                if norm_key in seen:
+                    continue
+                seen.add(norm_key)
+
+                if not force:
+                    existing = self.get_artist_knowledge(name_clean)
+                    if existing and not artist_knowledge_needs_refresh(existing):
+                        continue
+
+                items.append({
+                    "artist_name": name_clean,
+                    "song_title": r["track_title"] or "",
+                    "album_title": r["release_title"] or "",
+                    "review_status": r["review_status"] or "",
+                })
+                if limit and limit > 0 and len(items) >= limit:
+                    return items
+        return items
 
     def create_video_workflow_job(self, job: Dict[str, Any]) -> None:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -784,6 +1231,139 @@ class DiscoveryDB:
             )
             conn.commit()
             return True
+
+    def update_candidate_screening_reasons(
+        self,
+        candidate_id: int,
+        relevance_reasons: List[str],
+        review_status: Optional[str] = None,
+        review_note: Optional[str] = None,
+    ) -> bool:
+        """Update machine-generated candidate screening fields without recording human feedback."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reasons_json = json.dumps(relevance_reasons, ensure_ascii=False)
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT review_status FROM candidates WHERE id = ?",
+                (int(candidate_id),),
+            ).fetchone()
+            if not row:
+                return False
+            current_status = str(row["review_status"] or "pending")
+            next_status = review_status or current_status
+            if next_status not in {"pending", "machine_filtered"}:
+                next_status = current_status
+            conn.execute(
+                """
+                UPDATE candidates
+                SET relevance_reasons = ?,
+                    review_status = ?,
+                    review_notes = coalesce(?, review_notes),
+                    last_seen_at = ?
+                WHERE id = ?
+                """,
+                (reasons_json, next_status, review_note or None, now, int(candidate_id)),
+            )
+            if current_status != next_status:
+                conn.execute(
+                    """
+                    INSERT INTO review_history (candidate_id, previous_status, new_status, notes, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (int(candidate_id), current_status, next_status, review_note or "", now),
+                )
+            conn.commit()
+            return True
+
+    def apply_local_profile_filter_to_candidate(self, candidate_id: int) -> Dict[str, Any]:
+        """Run the conservative second-pass local artist-profile filter for one candidate."""
+        from song_discovery.artist_knowledge import split_artist_names
+        from song_discovery.local_profile_filter import (
+            PROFILE_FILTER_NOTE_PREFIX,
+            evaluate_candidate_with_local_profiles,
+            strip_profile_reasons,
+        )
+
+        candidate = self.get_candidate_by_id(candidate_id)
+        if not candidate:
+            return {"candidate_id": int(candidate_id), "updated": False, "reason": "missing_candidate"}
+
+        base_reasons = candidate.get("relevance_reasons") or []
+        if isinstance(base_reasons, str):
+            try:
+                parsed = json.loads(base_reasons)
+                base_reasons = parsed if isinstance(parsed, list) else [base_reasons]
+            except Exception:
+                base_reasons = [base_reasons]
+        cleaned_reasons = strip_profile_reasons(base_reasons)
+
+        artist_names = split_artist_names(str(candidate.get("artist_names") or ""))
+        knowledge_by_artist = {
+            name: self.get_artist_knowledge(name)
+            for name in artist_names
+        }
+        decision = evaluate_candidate_with_local_profiles(candidate, knowledge_by_artist)
+
+        # A human decision is an immutable editorial boundary.  The local
+        # profile pass may still be evaluated for diagnostics, but it must not
+        # rewrite screening reasons, notes, timestamps, or status after the
+        # candidate has left the untouched machine-review pool.
+        current_status = str(candidate.get("review_status") or "pending")
+        reviewed_at = candidate.get("reviewed_at")
+        if reviewed_at or current_status not in {"pending", "machine_filtered"}:
+            return {
+                "candidate_id": int(candidate_id),
+                "updated": False,
+                "decision": decision.to_dict(),
+                "review_status": current_status,
+                "reason": "human_reviewed",
+            }
+
+        merged_reasons = cleaned_reasons + decision.reasons
+
+        next_status: Optional[str] = None
+        note = ""
+        if decision.should_machine_filter and current_status == "pending" and not reviewed_at:
+            next_status = "machine_filtered"
+            note = f"{PROFILE_FILTER_NOTE_PREFIX} {'; '.join(decision.reasons)}"
+        elif current_status == "machine_filtered" and not reviewed_at and not decision.should_machine_filter:
+            next_status = "pending"
+            note = "本地画像补筛：资料不支持自动排除，恢复待人工审核"
+
+        updated = self.update_candidate_screening_reasons(
+            int(candidate_id),
+            [str(reason) for reason in merged_reasons if str(reason).strip()],
+            review_status=next_status,
+            review_note=note or None,
+        )
+        return {
+            "candidate_id": int(candidate_id),
+            "updated": updated,
+            "decision": decision.to_dict(),
+            "review_status": next_status or current_status,
+        }
+
+    def apply_local_profile_filter_for_artist(self, artist_name: str) -> int:
+        """Re-screen untouched candidates for an artist after local knowledge changes."""
+        if not artist_name:
+            return 0
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM candidates
+                WHERE artist_names LIKE ?
+                  AND review_status IN ('pending', 'machine_filtered')
+                  AND reviewed_at IS NULL
+                ORDER BY id DESC
+                """,
+                (f"%{artist_name.strip()}%",),
+            ).fetchall()
+        updated = 0
+        for row in rows:
+            result = self.apply_local_profile_filter_to_candidate(int(row["id"]))
+            if result.get("updated"):
+                updated += 1
+        return updated
 
     def get_feedbacks(
         self,

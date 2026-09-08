@@ -84,6 +84,8 @@ export interface PublicationItem {
   match_status: 'direct' | 'matched' | 'ambiguous' | 'unmatched';
   match_confidence: number;
   is_resolved: boolean;
+  is_published?: boolean;
+  is_excluded_from_delivery?: boolean;
   source_release_date?: string;
   target_release_date?: string;
   effective_release_date?: string;
@@ -118,11 +120,33 @@ export interface PublicationPreview {
   ready_items: PublicationItem[];
   ambiguous_items: PublicationItem[];
   unmatched_items: PublicationItem[];
+  excluded_items?: PublicationItem[];
+  excluded_count?: number;
   readiness: { is_ready: boolean; pending_count: number; incomplete_pending_count: number; message: string };
   ordered_candidate_ids: number[];
   out_of_week_count: number;
   out_of_week_items: PublicationItem[];
   release_window: {start:string;end:string};
+}
+
+export interface ArtistKnowledge {
+  artist_name: string;
+  display_name: string;
+  factual_summary: string;
+  sources: string[];
+  uncertainty: 'low' | 'medium' | 'high' | string;
+  identity_context: {
+    genre?: string[] | string;
+    origin?: string;
+    type?: string;
+    members?: string[];
+    active_years?: string;
+    notable_works?: string[];
+    [key: string]: any;
+  };
+  status: 'pending' | 'collecting' | 'completed' | 'sparse' | 'failed' | 'not_found' | 'local_missing';
+  updated_at?: string;
+  error?: string;
 }
 
 export interface NetEaseSearchItem {

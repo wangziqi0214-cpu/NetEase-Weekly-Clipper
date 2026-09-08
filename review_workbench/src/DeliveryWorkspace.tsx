@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import {
   deleteManualMatch,
+  excludeDeliverySong,
   exportWeeklyRelease,
   fetchLatestVideoWorkflow,
   fetchPublicationPreview,
@@ -35,14 +36,15 @@ import {
   fetchVideoWorkflowJobs,
   publishWeeklyRelease,
   resetPublishCopy,
+  restoreDeliverySong,
   resumeVideoWorkflowJob,
   savePublicationOrder,
   savePublishCopy,
   searchNetEaseSongs,
   setManualMatch,
 } from './api';
+import { ArtistHoverTrigger } from './ArtistHoverCard';
 import { NetEaseSearchItem, PublicationItem, PublicationPreview, PublishCopyData, VideoWorkflowJob } from './types';
-
 export default function DeliveryWorkspace({ onOpenSafety }: { onOpenSafety: () => void }) {
   const [preview, setPreview] = useState<PublicationPreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -118,6 +120,33 @@ export default function DeliveryWorkspace({ onOpenSafety }: { onOpenSafety: () =
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : '清除人工匹配失败');
+    }
+  };
+
+  const handleExclude = async (item: PublicationItem) => {
+    if (
+      !window.confirm(
+        `确认将《${item.track_title}》从本周交付中移除？\n\n该歌曲将保留在已通过候选库中，但会持久从本期交付中排除（刷新页面不会重新添加）。`
+      )
+    ) {
+      return;
+    }
+    try {
+      await excludeDeliverySong(item.candidate_id, preview?.playlist_name);
+      setMessage(`已将《${item.track_title}》从本周交付中移除`);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '移除失败');
+    }
+  };
+
+  const handleRestore = async (item: PublicationItem) => {
+    try {
+      await restoreDeliverySong(item.candidate_id, preview?.playlist_name);
+      setMessage(`已将《${item.track_title}》恢复至本周交付`);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '恢复失败');
     }
   };
 
@@ -254,6 +283,7 @@ export default function DeliveryWorkspace({ onOpenSafety }: { onOpenSafety: () =
                           onMove={to => move(index, to)}
                           onOpenMatch={() => setMatchingItem(item)}
                           onClearOverride={() => void handleClearOverride(item)}
+                          onRemove={() => void handleExclude(item)}
                         />
                       ))}
                     </tbody>
@@ -287,6 +317,12 @@ export default function DeliveryWorkspace({ onOpenSafety }: { onOpenSafety: () =
                   onOpenMatch={item => setMatchingItem(item)}
                   onClearOverride={item => void handleClearOverride(item)}
                 />
+                {preview.excluded_items && preview.excluded_items.length > 0 && (
+                  <ExcludedBox
+                    items={preview.excluded_items}
+                    onRestore={item => void handleRestore(item)}
+                  />
+                )}
               </section>
             </div>
 
@@ -1182,6 +1218,7 @@ function ReadyRow({
   onMove,
   onOpenMatch,
   onClearOverride,
+  onRemove,
 }: {
   item: PublicationItem;
   index: number;
@@ -1192,6 +1229,7 @@ function ReadyRow({
   onMove: (to: number) => void;
   onOpenMatch: () => void;
   onClearOverride: () => void;
+  onRemove: () => void;
 }) {
   return (
     <tr
@@ -1220,7 +1258,11 @@ function ReadyRow({
           <div className="truncate text-[9px] text-slate-500">匹配为 《{item.matched_title}》</div>
         )}
       </td>
-      <td className="max-w-[150px] truncate px-3 py-2 text-slate-400">{item.artist_names}</td>
+      <td className="max-w-[150px] truncate px-3 py-2 text-slate-400">
+        <ArtistHoverTrigger artistName={item.artist_names} songTitle={item.track_title}>
+          <span className="cursor-help hover:text-slate-200 transition">{item.artist_names}</span>
+        </ArtistHoverTrigger>
+      </td>
       <td className="px-3 py-2">
         <div className="font-mono text-[9px] text-emerald-400">{item.effective_release_date}</div>
         <div className="text-[8px] text-slate-600">源 {item.source_release_date || '--'}</div>
@@ -1237,7 +1279,24 @@ function ReadyRow({
           {item.is_manual_override && (
             <button
               onClick={onClearOverride}
-              title="清除人工匹配"
+              title="清除人工匹配，恢复自动判断"
+              className="flex h-5 w-5 items-center justify-center rounded bg-[#292d3a] text-amber-400 hover:bg-amber-950 hover:text-amber-200"
+            >
+              <RotateCcw className="h-3 w-3" />
+            </button>
+          )}
+          {item.is_published ? (
+            <button
+              disabled
+              title="该歌曲已发布至歌单，不可直接移除"
+              className="flex h-5 w-5 items-center justify-center rounded bg-[#292d3a] text-slate-600 cursor-not-allowed opacity-40"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          ) : (
+            <button
+              onClick={onRemove}
+              title="从本周交付中排除此曲（保留初筛与候选数据）"
               className="flex h-5 w-5 items-center justify-center rounded bg-[#292d3a] text-rose-400 hover:bg-rose-950 hover:text-rose-200"
             >
               <Trash2 className="h-3 w-3" />
@@ -1330,16 +1389,18 @@ function IssueBox({
                 {item.is_manual_override && (
                   <button
                     onClick={() => onClearOverride(item)}
-                    className="p-1 text-slate-500 hover:text-rose-400"
-                    title="清除人工匹配"
+                    className="p-1 text-slate-500 hover:text-amber-400"
+                    title="清除人工匹配，恢复自动判断"
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <RotateCcw className="h-3 w-3" />
                   </button>
                 )}
               </div>
             </div>
             <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-500">
-              <span className="max-w-[180px] truncate">{item.artist_names}</span>
+              <ArtistHoverTrigger artistName={item.artist_names} songTitle={item.track_title}>
+                <span className="max-w-[180px] truncate cursor-help hover:text-slate-300">{item.artist_names}</span>
+              </ArtistHoverTrigger>
               <span className="font-mono text-amber-500">{item.effective_release_date || item.release_gate_reason}</span>
             </div>
           </div>
@@ -1349,6 +1410,49 @@ function IssueBox({
             <CheckCircle2 className="h-3.5 w-3.5" />没有待处理项目
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ExcludedBox({
+  items,
+  onRestore,
+}: {
+  items: PublicationItem[];
+  onRestore: (item: PublicationItem) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-800/80 bg-[#12141c] text-slate-400">
+      <div className="flex items-center justify-between border-b border-slate-800/80 px-3 py-2.5">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+          <Trash2 className="h-4 w-4 text-slate-500" />
+          本期已移除排除 ({items.length})
+        </div>
+      </div>
+      <div className="max-h-48 divide-y divide-[#222634] overflow-auto">
+        {items.map(item => (
+          <div key={`excluded-${item.candidate_id}`} className="group px-3 py-2 hover:bg-[#181b26] transition">
+            <div className="flex items-center justify-between">
+              <div className="truncate text-xs text-slate-300">
+                <span className="line-through text-slate-500 mr-1.5">{item.track_title}</span>
+              </div>
+              <button
+                onClick={() => onRestore(item)}
+                className="rounded bg-violet-950/70 border border-violet-800/60 px-1.5 py-0.5 text-[10px] font-medium text-violet-300 hover:bg-violet-900 transition"
+                title="恢复至本期交付列表"
+              >
+                恢复
+              </button>
+            </div>
+            <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-500">
+              <ArtistHoverTrigger artistName={item.artist_names} songTitle={item.track_title}>
+                <span className="max-w-[180px] truncate cursor-help hover:text-slate-300">{item.artist_names}</span>
+              </ArtistHoverTrigger>
+              <span className="text-[9px] text-slate-600">已从交付排除</span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

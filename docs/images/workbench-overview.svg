@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 860" role="img" aria-labelledby="title desc">
+  <title id="title">候选审阅工作台示意图</title>
+  <desc id="desc">深色工作台界面，展示候选统计卡片、筛选栏和歌曲审核表格。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#090a0f"/><stop offset="1" stop-color="#111827"/></linearGradient>
+    <linearGradient id="blue" x1="0" x2="1"><stop stop-color="#2563eb"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity=".35"/></filter>
+  </defs>
+  <rect width="1440" height="860" fill="url(#bg)"/>
+  <rect x="28" y="28" width="1384" height="804" rx="18" fill="#0d1018" stroke="#283044" filter="url(#shadow)"/>
+  <rect x="28" y="28" width="1384" height="70" rx="18" fill="#151925"/>
+  <circle cx="70" cy="63" r="17" fill="#2563eb"/><circle cx="70" cy="63" r="7" fill="#dbeafe"/>
+  <text x="101" y="59" fill="#f8fafc" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="19" font-weight="700" letter-spacing="2">AGY CLIPPER</text>
+  <text x="263" y="59" fill="#60a5fa" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="11" font-weight="700">PRO</text>
+  <rect x="96" y="71" width="88" height="3" rx="2" fill="#3b82f6"/>
+  <rect x="326" y="43" width="132" height="38" rx="8" fill="#2563eb"/><text x="349" y="67" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="14" font-weight="600">候选审阅</text>
+  <rect x="466" y="43" width="118" height="38" rx="8" fill="#1b2030" stroke="#30394e"/><text x="489" y="67" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="14">本周交付</text>
+  <text x="1238" y="67" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="12">自动更新 · 01:00</text>
+
+  <g transform="translate(54 126)">
+    <rect width="250" height="92" rx="12" fill="#161b28" stroke="#2a3349"/><text x="20" y="28" fill="#94a3b8" font-family="sans-serif" font-size="13">全部候选</text><text x="20" y="68" fill="#f8fafc" font-family="sans-serif" font-size="32" font-weight="700">690</text><text x="120" y="66" fill="#64748b" font-family="sans-serif" font-size="12">独立曲 502</text>
+    <rect x="270" width="250" height="92" rx="12" fill="#10203c" stroke="#2756a2"/><text x="290" y="28" fill="#93c5fd" font-family="sans-serif" font-size="13">待人工审核</text><text x="290" y="68" fill="#dbeafe" font-family="sans-serif" font-size="32" font-weight="700">128</text><text x="390" y="66" fill="#93c5fd" font-family="sans-serif" font-size="12">独立曲 106</text>
+    <rect x="540" width="250" height="92" rx="12" fill="#211b12" stroke="#805d1b"/><text x="560" y="28" fill="#fbbf24" font-family="sans-serif" font-size="13">机筛拦截</text><text x="560" y="68" fill="#fef3c7" font-family="sans-serif" font-size="32" font-weight="700">421</text><text x="660" y="66" fill="#fbbf24" font-family="sans-serif" font-size="12">待补全 34</text>
+    <rect x="810" width="250" height="92" rx="12" fill="#10251f" stroke="#246b55"/><text x="830" y="28" fill="#6ee7b7" font-family="sans-serif" font-size="13">已通过</text><text x="830" y="68" fill="#d1fae5" font-family="sans-serif" font-size="32" font-weight="700">16</text><text x="930" y="66" fill="#6ee7b7" font-family="sans-serif" font-size="12">本周可交付</text>
+  </g>
+
+  <rect x="54" y="246" width="1332" height="62" rx="10" fill="#151925" stroke="#2a3349"/>
+  <rect x="76" y="262" width="240" height="30" rx="6" fill="#0d111b" stroke="#30394e"/><text x="92" y="282" fill="#64748b" font-family="sans-serif" font-size="12">⌕ 搜索歌曲、艺人、专辑</text>
+  <rect x="336" y="262" width="118" height="30" rx="6" fill="#1e293b"/><text x="358" y="282" fill="#cbd5e1" font-family="sans-serif" font-size="12">全部平台 ▾</text>
+  <rect x="466" y="262" width="118" height="30" rx="6" fill="#1e293b"/><text x="489" y="282" fill="#cbd5e1" font-family="sans-serif" font-size="12">待审核 ▾</text>
+  <rect x="596" y="262" width="150" height="30" rx="6" fill="#10203c" stroke="#2756a2"/><text x="618" y="282" fill="#93c5fd" font-family="sans-serif" font-size="12">去重：开启</text>
+  <text x="1193" y="282" fill="#64748b" font-family="sans-serif" font-size="12">已选 3 首</text><rect x="1260" y="258" width="102" height="38" rx="7" fill="url(#blue)"/><text x="1278" y="282" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">批量通过</text>
+
+  <rect x="54" y="330" width="1332" height="438" rx="12" fill="#121620" stroke="#283044"/>
+  <rect x="54" y="330" width="1332" height="48" rx="12" fill="#191e2b"/>
+  <g fill="#94a3b8" font-family="sans-serif" font-size="12" font-weight="600"><text x="78" y="360">封面</text><text x="151" y="360">歌曲名称 &amp; Feat</text><text x="407" y="360">歌手 / 合作艺人</text><text x="620" y="360">机筛分层与规则反馈</text><text x="889" y="360">来源平台</text><text x="1032" y="360">审核状态</text><text x="1154" y="360">专辑名称</text><text x="1322" y="360">发行日</text></g>
+  <g font-family="sans-serif" font-size="13">
+    <rect x="54" y="378" width="1332" height="78" fill="#141a25"/><rect x="78" y="395" width="45" height="45" rx="6" fill="#334155"/><circle cx="100" cy="417" r="12" fill="#64748b"/><text x="151" y="410" fill="#f8fafc" font-weight="600">夜航星</text><text x="151" y="432" fill="#64748b" font-size="11">The Night Flight</text><text x="407" y="417" fill="#cbd5e1">Schoolgirl Byebye</text><rect x="620" y="399" width="112" height="24" rx="5" fill="#103b32"/><text x="634" y="416" fill="#6ee7b7" font-size="11">3源高热</text><text x="746" y="416" fill="#64748b" font-size="11">乐队 · 独立</text><text x="889" y="417" fill="#38bdf8">网易云 · KKBOX</text><rect x="1032" y="399" width="78" height="24" rx="5" fill="#064e3b"/><text x="1045" y="416" fill="#6ee7b7" font-size="11">待审核</text><text x="1154" y="417" fill="#cbd5e1">Byebye EasternChicago</text><text x="1322" y="417" fill="#94a3b8">09-05</text>
+    <rect x="54" y="456" width="1332" height="78" fill="#111722"/><rect x="78" y="473" width="45" height="45" rx="6" fill="#4c1d95"/><circle cx="100" cy="495" r="12" fill="#a78bfa"/><text x="151" y="488" fill="#f8fafc" font-weight="600">潮汐之间</text><text x="151" y="510" fill="#64748b" font-size="11">Between Tides</text><text x="407" y="495" fill="#cbd5e1">理想混蛋</text><rect x="620" y="477" width="112" height="24" rx="5" fill="#172554"/><text x="634" y="494" fill="#93c5fd" font-size="11">规则命中</text><text x="746" y="494" fill="#64748b" font-size="11">发行日 · 独立</text><text x="889" y="495" fill="#60a5fa">网易云</text><rect x="1032" y="477" width="78" height="24" rx="5" fill="#27272a"/><text x="1045" y="494" fill="#a1a1aa" font-size="11">待审核</text><text x="1154" y="495" fill="#cbd5e1">今天明天</text><text x="1322" y="495" fill="#94a3b8">09-04</text>
+    <rect x="54" y="534" width="1332" height="78" fill="#141a25"/><rect x="78" y="551" width="45" height="45" rx="6" fill="#164e63"/><circle cx="100" cy="573" r="12" fill="#22d3ee"/><text x="151" y="566" fill="#f8fafc" font-weight="600">山风吹过乌云朵</text><text x="151" y="588" fill="#64748b" font-size="11">Wind Through the Clouds</text><text x="407" y="573" fill="#cbd5e1">象乐队</text><rect x="620" y="555" width="112" height="24" rx="5" fill="#211b12"/><text x="634" y="572" fill="#fbbf24" font-size="11">需核验</text><text x="746" y="572" fill="#64748b" font-size="11">艺人资料待补</text><text x="889" y="573" fill="#38bdf8">QQ · KKBOX</text><rect x="1032" y="555" width="78" height="24" rx="5" fill="#27272a"/><text x="1045" y="572" fill="#a1a1aa" font-size="11">待审核</text><text x="1154" y="573" fill="#64748b">无专辑</text><text x="1322" y="573" fill="#94a3b8">09-03</text>
+    <rect x="54" y="612" width="1332" height="78" fill="#111722"/><rect x="78" y="629" width="45" height="45" rx="6" fill="#3f1d2e"/><circle cx="100" cy="651" r="12" fill="#fb7185"/><text x="151" y="644" fill="#f8fafc" font-weight="600">凌晨四点</text><text x="151" y="666" fill="#64748b" font-size="11">4:00 AM</text><text x="407" y="651" fill="#cbd5e1">独立计划 Project</text><rect x="620" y="633" width="112" height="24" rx="5" fill="#3f1d2e"/><text x="634" y="650" fill="#fda4af" font-size="11">噪音候选</text><text x="746" y="650" fill="#64748b" font-size="11">类型待确认</text><text x="889" y="651" fill="#60a5fa">QQ 音乐</text><rect x="1032" y="633" width="78" height="24" rx="5" fill="#4c0519"/><text x="1045" y="650" fill="#fda4af" font-size="11">已否决</text><text x="1154" y="651" fill="#64748b">单曲</text><text x="1322" y="651" fill="#94a3b8">09-02</text>
+  </g>
+  <text x="76" y="737" fill="#475569" font-family="sans-serif" font-size="11">示意图 · 实际候选、评分和状态由本地 SQLite 数据库实时填充</text>
+</svg>

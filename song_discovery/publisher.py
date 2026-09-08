@@ -335,6 +335,10 @@ class NetEasePublisher:
             if not is_incomplete_kkbox_candidate(candidate)
         ]
         approved_candidates = deduplicate_candidates(approved_raw, all_candidates=approved_raw)
+        if playlist_name and hasattr(self.db, "get_delivery_exclusions"):
+            excluded_ids = set(self.db.get_delivery_exclusions(playlist_name))
+            if excluded_ids:
+                approved_candidates = [row for row in approved_candidates if int(row["id"]) not in excluded_ids]
         if publish_candidate_ids is not None:
             allowed = {int(value) for value in publish_candidate_ids}
             approved_candidates = [row for row in approved_candidates if int(row["id"]) in allowed]

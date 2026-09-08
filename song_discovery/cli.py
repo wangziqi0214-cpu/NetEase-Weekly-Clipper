@@ -367,6 +367,72 @@ def cmd_rollback_model(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_backfill_artist_knowledge(args: argparse.Namespace) -> None:
+    from song_discovery.artist_knowledge import ArtistKnowledgeCollector
+    db = DiscoveryDB(db_path=args.db_path)
+    concurrency = max(1, getattr(args, "concurrency", 2))
+    collector = ArtistKnowledgeCollector(db=db, max_workers=concurrency)
+
+    status_filter = getattr(args, "status", "active")
+    is_all = getattr(args, "all", False)
+    limit = 0 if is_all else getattr(args, "limit", 50)
+    force = getattr(args, "force", False)
+    specific_artist = getattr(args, "artist", None)
+
+    print("=" * 60)
+    print("[ARTIST KNOWLEDGE SYNC / BACKFILL] Starting bounded collection")
+    print(f"Database: {args.db_path} | Filter: {status_filter} | Limit: {'ALL' if limit == 0 else limit} | Concurrency: {concurrency} | Force: {force}")
+    if specific_artist:
+        print(f"Target Artist: '{specific_artist}'")
+    print("=" * 60)
+
+    artists = db.get_artists_needing_backfill(
+        limit=limit,
+        force=force,
+        specific_artist=specific_artist,
+        status_filter=status_filter if status_filter != "all" else None,
+    )
+    if not artists:
+        print("No artists need knowledge collection at this time.")
+        return
+
+    print(f"Found {len(artists)} artists needing knowledge sync.")
+    results = {"completed": 0, "sparse": 0, "failed": 0}
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        future_map = {
+            executor.submit(
+                collector.collect_sync,
+                item["artist_name"],
+                item.get("song_title", ""),
+                item.get("album_title", ""),
+                force,
+            ): item["artist_name"]
+            for item in artists
+        }
+        idx = 0
+        for fut in concurrent.futures.as_completed(future_map):
+            idx += 1
+            artist = future_map[fut]
+            try:
+                rec = fut.result()
+                status = rec.get("status", "unknown")
+                results[status] = results.get(status, 0) + 1
+                unc = rec.get("uncertainty", "unknown")
+                sources_count = len(rec.get("sources") or [])
+                err_snippet = f" | Error: {rec.get('error')}" if rec.get("error") else ""
+                print(f"[{idx}/{len(artists)}] '{artist}' -> {status} (uncertainty: {unc}, sources: {sources_count}){err_snippet}")
+            except Exception as exc:
+                results["failed"] = results.get("failed", 0) + 1
+                print(f"[{idx}/{len(artists)}] '{artist}' -> failed: {exc}")
+
+    print("\n" + "=" * 60)
+    print(f"[SYNC SUMMARY] Total Processed: {len(artists)}")
+    print(f"Completed: {results.get('completed', 0)} | Sparse: {results.get('sparse', 0)} | Failed: {results.get('failed', 0)}")
+    print("=" * 60)
+
+
 def main():
     # Load local credentials only for actual CLI/daemon execution. Keeping this
     # out of module import avoids leaking workstation configuration into tests
@@ -460,6 +526,20 @@ def main():
     rb_parser.add_argument("--version-id", type=str, required=True, help="Target model version identifier to activate")
     rb_parser.add_argument("--db-path", type=str, default="output/discovery.db", help="SQLite DB path")
 
+    # 12. Backfill / sync artist knowledge command
+    for cmd_name, cmd_help in [
+        ("backfill-artist-knowledge", "Bounded backfill of artist knowledge library using agy"),
+        ("sync-artist-knowledge", "Synchronize artist knowledge library from SQLite candidate pool"),
+    ]:
+        sub = subparsers.add_parser(cmd_name, help=cmd_help)
+        sub.add_argument("--db-path", type=str, default="output/discovery.db", help="SQLite DB path (default: output/discovery.db)")
+        sub.add_argument("--limit", type=int, default=50, help="Maximum number of artists to process (default: 50, 0 for all)")
+        sub.add_argument("--all", action="store_true", help="Process all matching artists (overrides limit)")
+        sub.add_argument("--status", type=str, default="active", choices=["all", "active", "pending", "approved", "machine_filtered", "rejected"], help="Filter candidates by review status (default: active)")
+        sub.add_argument("--concurrency", type=int, default=2, help="Maximum worker concurrency (default: 2)")
+        sub.add_argument("--artist", type=str, default=None, help="Optional specific artist name to research")
+        sub.add_argument("--force", action="store_true", help="Force re-collection even if record already exists")
+
     args = parser.parse_args()
     if args.command == "collect":
         cmd_collect(args)
@@ -483,6 +563,8 @@ def main():
         cmd_train_model(args)
     elif args.command == "rollback-model":
         cmd_rollback_model(args)
+    elif args.command in ("backfill-artist-knowledge", "sync-artist-knowledge"):
+        cmd_backfill_artist_knowledge(args)
     else:
         parser.print_help()
 

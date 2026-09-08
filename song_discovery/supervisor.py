@@ -448,6 +448,9 @@ class DiscoverySupervisor:
         current_pending = stats.get("pending", 0)
         update_pending_tracking(state, current_pending)
 
+        # Automatically enqueue missing/failed artist knowledge in background
+        self.enqueue_missing_artist_knowledge()
+
         # Notification check
         if self.enable_notifications and should_send_notification(state, current_pending, self.debounce_seconds):
             review_url = f"http://{self.review_host}:{self.review_port}"
@@ -463,6 +466,29 @@ class DiscoverySupervisor:
 
         self.save_state(state)
         return run_result
+
+    def enqueue_missing_artist_knowledge(self, limit: int = 100) -> int:
+        """Asynchronously enqueue background research for missing/failed artists in SQLite."""
+        try:
+            from song_discovery.artist_knowledge import get_artist_collector
+            collector = get_artist_collector(self.db)
+            needed = self.db.get_artists_needing_backfill(limit=limit, status_filter="active")
+            if not needed:
+                needed = self.db.get_artists_needing_backfill(limit=limit)
+            enqueued = 0
+            for item in needed:
+                if collector.enqueue_artist(
+                    artist_name=item["artist_name"],
+                    song_title=item.get("song_title", ""),
+                    album_title=item.get("album_title", ""),
+                ):
+                    enqueued += 1
+            if enqueued > 0:
+                logger.info("[SUPERVISOR] Enqueued %d missing artists for background research", enqueued)
+            return enqueued
+        except Exception as exc:
+            logger.warning("[SUPERVISOR] Failed to enqueue missing artist knowledge: %s", exc)
+            return 0
 
     def poll_and_consume_refresh_commands(self) -> None:
         """
@@ -687,6 +713,8 @@ class DiscoverySupervisor:
             if is_due or startup_due or run_once:
                 self.run_discovery_iteration()
                 last_run_ts = time.time()
+            else:
+                self.enqueue_missing_artist_knowledge()
 
             if run_once:
                 logger.info("[SUPERVISOR] Completed single pass (--once mode).")
